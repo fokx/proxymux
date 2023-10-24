@@ -106,13 +106,13 @@ def server(local_host, local_port, remote_host, max_connection, remote_port, rou
     logging.info("[+] Shutting down the server!")
 
 
-def redirect_remote_to_local(local_port, remote_port=None):
+def redirect_remote_to_local(forward_to, forward_from=None):
     try:
         LOCAL_HOST = '127.0.0.1'
         # LOCAL_HOST = '0.0.0.0'
         REMOTE_HOST = '127.0.0.1'
         MAX_CONNECTION = 0x10
-        server(LOCAL_HOST, local_port, REMOTE_HOST, MAX_CONNECTION, remote_port, round_robin_ports=[])
+        server(LOCAL_HOST, forward_to, REMOTE_HOST, MAX_CONNECTION, forward_from, round_robin_ports=[])
         # server(LOCAL_HOST, local_port, REMOTE_HOST, MAX_CONNECTION, remote_port, round_robin_ports=[5110, 5120, 5130, 5150, 5115, 5125, 5135])
     except Exception as e:
         logging.error(e)
@@ -126,4 +126,4 @@ if __name__ == "__main__":
     parser.add_argument("src_port_number", type=int, help="source port number")
     parser.add_argument("dst_port_number", type=int, help="destination port number")
     args = parser.parse_args()
-    redirect_remote_to_local(args.src_port_number, args.dst_port_number)
+    redirect_remote_to_local(forward_to=args.dst_port_number, forward_from=args.src_port_number)
