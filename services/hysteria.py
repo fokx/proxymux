@@ -14,7 +14,7 @@ from services.local_port_num_generator import generate_local_port
 
 bandwidth = '48'
 
-def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.Connection = None, port=None,
+def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.Connection = None, remote_port=None,
            password=None,
            should_close_client=False):
   if client is None:
@@ -25,8 +25,8 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
   ftp = client.open_sftp()
 
   # use privileged ports to prevent conflict with outgoing services
-  if port is None:
-    port = random.randrange(HY_P1, HY_P2)
+  if remote_port is None:
+    remote_port = random.randrange(HY_P1, HY_P2)
 
   # port hop is error-prone
   # aux_port_range = []
@@ -40,7 +40,7 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
   #   conn.run(
   #     f'iptables{suf} -t nat -A PREROUTING -i eth0 -p udp --dport {aux_port_range_iptables} -j DNAT --to-destination :{port}')
 
-  assert isinstance(port, int)
+  assert isinstance(remote_port, int)
   if password is None:
     password_length = random.randrange(22, 31)
     password = secrets.token_urlsafe(password_length)
@@ -51,22 +51,22 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
   remote_config_dir = Path('/etc/hys')
   conn.run(f'mkdir -p {remote_config_dir}')
 
-  cer, key = gen_key_cer(host)
+  cer, key = gen_key_cer(target_masq_domain)
 
-  cer_path = f'/etc/hys/{port}.cer.pem'
+  cer_path = f'/etc/hys/{remote_port}.cer.pem'
   file = ftp.file(cer_path, "w")
   file.write(cer)
   file.flush()
 
-  key_path = f'/etc/hys/{port}.key.pem'
+  key_path = f'/etc/hys/{remote_port}.key.pem'
   file = ftp.file(key_path, "w")
   file.write(key)
   file.flush()
 
   config_extension = '.yaml'
-  remote_config_path = remote_config_dir / f'{port}{config_extension}'
+  remote_config_path = remote_config_dir / f'{remote_port}{config_extension}'
   remote_config_content = f'''
-listen: :{port}
+listen: :{remote_port}
 
 tls:
   cert: {cer_path}
@@ -100,8 +100,8 @@ User=caddy
 Group=caddy
 ExecStart={remote_bin_path} server --config {remote_config_dir}/%i{config_extension} --disable-update-check
 WorkingDirectory=~
-User=hysteria
-Group=hysteria
+User=caddy
+Group=caddy
 Environment=HYSTERIA_LOG_LEVEL=info
 Environment=HYSTERIA_ACME_DIR=/var/lib/hysteria/acme
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
@@ -117,14 +117,14 @@ WantedBy=multi-user.target
 
   local_config_dir = Path('/etc/hyc')
   local_port = generate_local_port(host, __file__)
-  local_cert_path = local_config_dir / f'{host}{port}.cer.pem'
+  local_cert_path = local_config_dir / f'{host}{remote_port}.cer.pem'
   with open(local_cert_path, 'w') as f:
     f.write(cer)
 
-  with open(local_config_dir / f'{host}{port}{config_extension}', 'w') as f:
+  with open(local_config_dir / f'{host}{remote_port}{config_extension}', 'w') as f:
     # mind yaml indentation
     f.write(f'''
-server: {ip}:{port}{aux_port_range_yaml}
+server: {ip}:{remote_port}{aux_port_range_yaml}
 
 auth: {password}
 
@@ -159,8 +159,8 @@ User=tr
 Group=tr
 ExecStart={local_bin_path} client --config {local_config_dir}/%i{config_extension} --disable-update-check
 WorkingDirectory=~
-User=hysteria
-Group=hysteria
+User=caddy
+Group=caddy
 Environment=HYSTERIA_LOG_LEVEL=info
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
@@ -171,9 +171,9 @@ WantedBy=multi-user.target
 '''.lstrip()
   with open(local_service_path, 'w') as f:
     f.write(local_service_content)
-  remote_systemd_service_name = f'{port}'
+  remote_systemd_service_name = f'{remote_port}'
 
-  local_systemd_service_name = f'{host}{port}'
+  local_systemd_service_name = f'{host}{remote_port}'
   conn.run(f'systemctl enable --now {remote_systemd_service_name}.service')
   os.system(f'systemctl enable --now {local_systemd_service_name}.service')
 

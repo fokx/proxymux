@@ -13,7 +13,7 @@ from services.get_ssh_client import new_ssh_client
 from services.rcgen import gen_key_cer
 from services.local_port_num_generator import generate_local_port
 
-def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.Connection = None, port=None,
+def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.Connection = None, remote_port=None,
            password=None,
            should_close_client=False):
   if client is None:
@@ -24,10 +24,10 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
   ftp = client.open_sftp()
 
   # use privileged ports to prevent conflict with outgoing services
-  if port is None:
-    port = random.randrange(TUIC_P1, TUIC_P2)
+  if remote_port is None:
+    remote_port = random.randrange(TUIC_P1, TUIC_P2)
 
-  assert isinstance(port, int)
+  assert isinstance(remote_port, int)
   if password is None:
     password_length = random.randrange(22, 31)
     password = secrets.token_urlsafe(password_length)
@@ -37,28 +37,29 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
   remote_config_dir = Path('/etc/tuics')
   conn.run(f'mkdir -p {remote_config_dir}')
 
-  cer, key = gen_key_cer(host)
+  cer, key = gen_key_cer(target_masq_domain)
 
-  cer_path = f'/etc/tuics/{port}.cer.pem'
+  cer_path = f'/etc/tuics/{remote_port}.cer.pem'
   file = ftp.file(cer_path, "w")
   file.write(cer)
   file.flush()
 
-  key_path = f'/etc/tuics/{port}.key.pem'
+  key_path = f'/etc/tuics/{remote_port}.key.pem'
   file = ftp.file(key_path, "w")
   file.write(key)
   file.flush()
 
   config_extension = '.json'
-  remote_config_path = remote_config_dir / f'{port}{config_extension}'
+  remote_config_path = remote_config_dir / f'{remote_port}{config_extension}'
   u1 = uuid.uuid4()
   u2 = uuid.uuid4()
+  # warning: Almost the same password is use!
   remote_config_content = f'''
 {{
-    "server": "[::]:{port}",
+    "server": "[::]:{remote_port}",
     "users": {{
         "{u1}": "{password}",
-        "{u2}": "{password}"
+        "{u2}": "{password}JUu1290"
     }},
     "alpn": ["h3"],
     "congestion_control": "bbr",
@@ -114,33 +115,38 @@ WantedBy=multi-user.target
 
   local_config_dir = Path('/etc/tuicc')
   local_port = generate_local_port(host, __file__)
-  local_cert_path = local_config_dir / f'{host}{port}.cer.pem'
+  local_cert_path = local_config_dir / f'{host}{remote_port}.cer.pem'
   with open(local_cert_path, 'w') as f:
     f.write(cer)
 
-  with open(local_config_dir / f'{host}{port}{config_extension}', 'w') as f:
+  with open(local_config_dir / f'{host}{remote_port}{config_extension}', 'w') as f:
     # mind yaml indentation
-    f.write(f'''
-server: {ip}:{port},{aux_port_range_yaml}
-
-auth: {password}
-
-bandwidth:
-  up: {bandwidth} mbps
-  down: {bandwidth} mbps
-
-socks5:
-  listen: 127.0.0.1:{local_port}
-
-tls:
-  sni: localhost
-  insecure: false
-  ca: {local_cert_path}
-
-transport:
-  udp:
-    hopInterval: 25s 
-  '''.lstrip())
+    f.write(f''' 
+{{
+    "relay": {{
+        "server": "{target_masq_domain}:{remote_port}",
+        "uuid": "{u1}",
+        "password": "{password}",
+        "ip": "{ip}",
+        "certificates": ["{local_cert_path}"],
+        "udp_relay_mode": "native",
+        "congestion_control": "bbr",
+    "alpn": ["h3", "spdy/3.1"],
+        "zero_rtt_handshake": false,
+        "disable_sni": false,
+        "timeout": "8s",
+        "heartbeat": "3s",
+        "disable_native_certs": false,
+        "gc_interval": "3s",
+        "gc_lifetime": "15s"
+    }},
+    "local": {{
+        "server": "127.0.0.1:{local_port}",
+        "max_packet_size": 1500
+    }},
+    "log_level": "debug"
+}}
+'''.lstrip())
 
   local_service_path = '/etc/systemd/system/tuicc@.service'
   local_bin_path = '/usr/bin/tuicc'
@@ -195,9 +201,9 @@ WantedBy=default.target
 '''.lstrip()
   with open(local_service_path, 'w') as f:
     f.write(local_service_content)
-  remote_systemd_service_name = f'{port}'
+  remote_systemd_service_name = f'{remote_port}'
 
-  local_systemd_service_name = f'{host}{port}'
+  local_systemd_service_name = f'{host}{remote_port}'
   conn.run(f'systemctl enable --now {remote_systemd_service_name}.service')
   os.system(f'systemctl enable --now {local_systemd_service_name}.service')
 

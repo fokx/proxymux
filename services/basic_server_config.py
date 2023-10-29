@@ -1,7 +1,7 @@
 import paramiko
 from fabric import Connection
 
-def create_caddy(host):
+def create_user_caddy(host):
     cmd = '''
     groupadd --system caddy
     useradd --system \

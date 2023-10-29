@@ -15,15 +15,21 @@ www.cloudflare.com
 
 '''.strip().splitlines()
 
-HY_P1 = 201
+# potentially occupied ports:
+# ANY_P1 - ANY_P2
+# HY_P3 - HY_P5
+
+HY_P1 = 360
 HY_P2 = 442
 HY_P3 = 444
-HY_P4 = 614
-HY_P5 = 890
+HY_P4 = 514
+HY_P5 = 650
 
-# potentially occupied ports:
-# HY_P1-HY_P2, HY_P3-HY_P5
-# TUIC_P1-TUIC_P2
+TUIC_P1 = HY_P5 + 1
+TUIC_P2 = 733
 
-TUIC_P1 = 891
-TUIC_P2 = 1023
+NAIVE_P1 = TUIC_P2  + 1
+NAIVE_P2 = 811
+
+XR_P1 = NAIVE_P2 + 1
+XR_P2 = 900

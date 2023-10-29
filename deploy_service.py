@@ -3,10 +3,7 @@ import os
 import paramiko
 from fabric import Connection
 
-from services import basic_server_config
-from services import hysteria
-from services import tuic
-from services import xray
+from services import basic_server_config, hysteria, tuic, xr, naive
 from services.get_ssh_client import new_ssh_client
 
 
@@ -17,11 +14,12 @@ def deploy_all(host):
   client, ip = new_ssh_client(host)
   conn = Connection(host)
 
-  # basic_server_config.create_caddy(ssh)
+  basic_server_config.create_user_caddy(client)
   hysteria.deploy(host, ip, client, conn)
-  tuic.deploy()
-  xray.deploy()
-  # naive.deploy()
+  tuic.deploy(host, ip, client, conn)
+  naive_port  = None if host in 'npd lav'.strip().split() else 443
+  naive.deploy(host, ip, client, conn, naive_port) # semi-auto
+  xr.deploy(host, ip, client, conn)
   client.close()
 
 
