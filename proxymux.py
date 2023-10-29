@@ -12,7 +12,7 @@ from config import name_to_port_dict, init_selected_name, init_forwarded_to_port
 from latency_test import auto_redir
 import importlib
 
-proxymux_map = importlib.import_module("proxymux-map")
+import proxymux_map
 
 import urwid
 

@@ -1,0 +1,5 @@
+aiologger
+PySocks
+requests
+urwid
+fabric
