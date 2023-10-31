@@ -8,7 +8,8 @@ import secrets
 import fabric
 import paramiko
 
-from services.common import masquerade_domain_pool, NAIVE_P1, NAIVE_P2
+from services.common import masquerade_domain_pool, NAIVE_P1, NAIVE_P2, LEN_PASSWD_MIN, LEN_PASSWD_MAX, local_user, \
+  common_permission_job
 from services.get_ssh_client import new_ssh_client
 from services.local_port_num_generator import generate_local_port
 
@@ -29,7 +30,7 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
 
   assert isinstance(port, int)
   if password is None:
-    password_length = random.randrange(22, 31)
+    password_length = random.randrange(LEN_PASSWD_MIN, LEN_PASSWD_MAX)
     password = secrets.token_urlsafe(password_length)
   assert isinstance(password, str)
 
@@ -55,8 +56,8 @@ forward_proxy {{
 
   remote_bin_path = '/usr/bin/caddy'
   ftp.put('/usr/bin/caddy', remote_bin_path)
-
-  remote_service_path = '/etc/systemd/system/cd@.service'
+  remote_service_name = 'cd'
+  remote_service_path = f'/etc/systemd/system/{remote_service_name}@.service'
   remote_service_content = f'''
 [Unit]
 Description=Caddy
@@ -84,6 +85,8 @@ WantedBy=multi-user.target
   file.flush()
 
   local_config_dir = Path('/etc/np')
+  local_config_dir.mkdir(exist_ok=True, parents=True)
+
   local_port = generate_local_port(host, __file__)
   config_extension = '.json'
   domain_name = 'x.com'  # MANUAL domain edit
@@ -98,8 +101,8 @@ WantedBy=multi-user.target
 }}
 
   '''.lstrip())
-
-  local_service_path = '/etc/systemd/system/np@.service'
+  local_service_name = 'np'
+  local_service_path = f'/etc/systemd/system/{local_service_name}@.service'
   local_bin_path = '/usr/bin/naive'
   local_service_content = f'''
 [Unit]
@@ -108,7 +111,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=tr
+User={local_user}
 Restart=on-failure
 RestartSec=5s
 ExecStart={local_bin_path} {local_config_dir}/%i{config_extension}
@@ -154,8 +157,7 @@ WantedBy=default.target
     f.write(local_service_content)
   remote_systemd_service_name = 'cd'
   local_systemd_service_name = f'{host}{port}'
-  conn.run(f'systemctl enable --now {remote_systemd_service_name}.service')
-  os.system(f'systemctl enable --now {local_systemd_service_name}.service')
+  common_permission_job(conn, remote_bin_path, remote_config_dir, local_bin_path, local_config_dir, remote_service_name, remote_systemd_service_name, local_service_name, local_systemd_service_name)
 
   ftp.close()
   if should_close_client:

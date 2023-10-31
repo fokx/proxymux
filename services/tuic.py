@@ -8,10 +8,14 @@ import secrets
 import fabric
 import paramiko
 
-from services.common import masquerade_domain_pool, TUIC_P1, TUIC_P2
+from services.common import masquerade_domain_pool, TUIC_P1, TUIC_P2, LEN_PASSWD_MIN, LEN_PASSWD_MAX, remote_user, \
+  local_user, common_permission_job
 from services.get_ssh_client import new_ssh_client
 from services.rcgen import gen_key_cer
 from services.local_port_num_generator import generate_local_port
+local_config_dir = Path('/etc/tuicc')
+remote_config_dir = Path('/etc/tuics')
+
 
 def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.Connection = None, remote_port=None,
            password=None,
@@ -29,12 +33,11 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
 
   assert isinstance(remote_port, int)
   if password is None:
-    password_length = random.randrange(22, 31)
+    password_length = random.randrange(LEN_PASSWD_MIN, LEN_PASSWD_MAX)
     password = secrets.token_urlsafe(password_length)
   assert isinstance(password, str)
 
   target_masq_domain = random.choice(masquerade_domain_pool)
-  remote_config_dir = Path('/etc/tuics')
   conn.run(f'mkdir -p {remote_config_dir}')
 
   cer, key = gen_key_cer(target_masq_domain)
@@ -85,8 +88,8 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
 
   remote_bin_path = '/usr/bin/tuics'
   ftp.put('/f/tuic/target/x86_64-unknown-linux-musl/release/tuic-server', remote_bin_path)
-
-  remote_service_path = '/etc/systemd/system/tuics@.service'
+  remote_service_name = 'tuics'
+  remote_service_path = f'/etc/systemd/system/{remote_service_name}@.service'
   remote_service_content = f'''
   [Unit]
 Description=TUICserver
@@ -95,8 +98,8 @@ After=network.target network-online.target
 Requires=network-online.target
 
 [Service]
-User=caddy
-Group=caddy
+User={remote_user}
+Group={remote_user}
 ExecStart={remote_bin_path} -c {remote_config_dir}/%i{config_extension}
 ExecReload={remote_bin_path} -c {remote_config_dir}/%i{config_extension}
 TimeoutStopSec=5s
@@ -109,13 +112,14 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 [Install]
 WantedBy=multi-user.target
 '''.lstrip()
+
   file = ftp.file(remote_service_path, "w")
   file.write(remote_service_content)
   file.flush()
 
-  local_config_dir = Path('/etc/tuicc')
   local_port = generate_local_port(host, __file__)
   local_cert_path = local_config_dir / f'{host}{remote_port}.cer.pem'
+  local_config_dir.mkdir(exist_ok=True, parents=True)
   with open(local_cert_path, 'w') as f:
     f.write(cer)
 
@@ -147,8 +151,8 @@ WantedBy=multi-user.target
     "log_level": "debug"
 }}
 '''.lstrip())
-
-  local_service_path = '/etc/systemd/system/tuicc@.service'
+  local_service_name = 'tuicc'
+  local_service_path = f'/etc/systemd/system/{local_service_name}@.service'
   local_bin_path = '/usr/bin/tuicc'
   local_service_content = f'''
 [Unit]
@@ -157,7 +161,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=tr
+User={local_user}
 Restart=on-failure
 RestartSec=5s
 ExecStart={local_bin_path} -c {local_config_dir}/%i{config_extension}
@@ -204,6 +208,9 @@ WantedBy=default.target
   remote_systemd_service_name = f'{remote_port}'
 
   local_systemd_service_name = f'{host}{remote_port}'
+
+  common_permission_job(conn, remote_bin_path, remote_config_dir, local_bin_path, local_config_dir, remote_service_name, remote_systemd_service_name, local_service_name, local_systemd_service_name)
+
   conn.run(f'systemctl enable --now {remote_systemd_service_name}.service')
   os.system(f'systemctl enable --now {local_systemd_service_name}.service')
 

@@ -7,12 +7,16 @@ import secrets
 import fabric
 import paramiko
 
-from services.common import masquerade_domain_pool, HY_P2, HY_P1, HY_P3, HY_P4, HY_P5
+from services.common import masquerade_domain_pool, HY_P2, HY_P1, HY_P3, HY_P4, HY_P5, LEN_PASSWD_MIN, LEN_PASSWD_MAX, \
+  local_user, remote_user, common_permission_job
 from services.get_ssh_client import new_ssh_client
 from services.rcgen import gen_key_cer
 from services.local_port_num_generator import generate_local_port
 
 bandwidth = '48'
+local_config_dir = Path('/etc/hyc')
+remote_config_dir = Path('/etc/hys')
+
 
 def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.Connection = None, remote_port=None,
            password=None,
@@ -42,13 +46,12 @@ def deploy(host: str, ip: str, client: paramiko.SSHClient = None, conn: fabric.C
 
   assert isinstance(remote_port, int)
   if password is None:
-    password_length = random.randrange(22, 31)
+    password_length = random.randrange(LEN_PASSWD_MIN, LEN_PASSWD_MAX)
     password = secrets.token_urlsafe(password_length)
   assert isinstance(password, str)
 
   target_masq_domain = random.choice(masquerade_domain_pool)
   target_masq_url = f'https://{target_masq_domain}/'
-  remote_config_dir = Path('/etc/hys')
   conn.run(f'mkdir -p {remote_config_dir}')
 
   cer, key = gen_key_cer(target_masq_domain)
@@ -88,7 +91,9 @@ masquerade:
   remote_bin_path = '/usr/bin/hy'
   ftp.put('/usr/bin/hysteria', remote_bin_path)
 
-  remote_service_path = '/etc/systemd/system/hys@.service'
+  remote_service_name =  'hys'
+  remote_service_path = f'/etc/systemd/system/{remote_service_name}@.service'
+
   remote_service_content = f'''
 [Unit]
 Description=hys
@@ -96,12 +101,12 @@ After=network.target
 
 [Service]
 Type=simple
-User=caddy
-Group=caddy
+User={remote_user}
+Group={remote_user}
 ExecStart={remote_bin_path} server --config {remote_config_dir}/%i{config_extension} --disable-update-check
 WorkingDirectory=~
-User=caddy
-Group=caddy
+User={remote_user}
+Group={remote_user}
 Environment=HYSTERIA_LOG_LEVEL=info
 Environment=HYSTERIA_ACME_DIR=/var/lib/hysteria/acme
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
@@ -115,9 +120,9 @@ WantedBy=multi-user.target
   file.write(remote_service_content)
   file.flush()
 
-  local_config_dir = Path('/etc/hyc')
   local_port = generate_local_port(host, __file__)
   local_cert_path = local_config_dir / f'{host}{remote_port}.cer.pem'
+  local_config_dir.mkdir(exist_ok=True, parents=True)
   with open(local_cert_path, 'w') as f:
     f.write(cer)
 
@@ -145,8 +150,9 @@ transport:
     hopInterval: 25s 
   '''.lstrip())
 
-  local_service_path = '/etc/systemd/system/hyc@.service'
-  local_bin_path = '/usr/bin/hysteria'
+  local_service_name = 'hyc'
+  local_service_path = f'/etc/systemd/system/{local_service_name}@.service'
+  local_bin_path = '/usr/bin/hy'
   local_service_content = f'''
 [Unit]
 Description=Hysteria Client Service
@@ -155,12 +161,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=tr
-Group=tr
+User={local_user}
+Group={local_user}
 ExecStart={local_bin_path} client --config {local_config_dir}/%i{config_extension} --disable-update-check
 WorkingDirectory=~
-User=caddy
-Group=caddy
 Environment=HYSTERIA_LOG_LEVEL=info
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
@@ -172,10 +176,10 @@ WantedBy=multi-user.target
   with open(local_service_path, 'w') as f:
     f.write(local_service_content)
   remote_systemd_service_name = f'{remote_port}'
-
   local_systemd_service_name = f'{host}{remote_port}'
-  conn.run(f'systemctl enable --now {remote_systemd_service_name}.service')
-  os.system(f'systemctl enable --now {local_systemd_service_name}.service')
+  common_permission_job(conn, remote_bin_path, remote_config_dir, local_bin_path, local_config_dir, remote_service_name, remote_systemd_service_name, local_service_name, local_systemd_service_name)
+
+
 
   ftp.close()
   if should_close_client:
